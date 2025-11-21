@@ -1,5 +1,5 @@
 // MoonTV 双向聊天机器人 - Cloudflare Worker
-// 完整功能版 - 零群组依赖
+// 完整功能修复版 - 解决重复消息和退出问题
 
 const USER_AGENT = "CF-Workers-MoonTVRegisterBot/cmliu";
 
@@ -224,9 +224,16 @@ async function handleAdminReplyInput(bot_token, adminId, chatId, text, KV) {
     }
 }
 
-// 进入聊天模式
+// 进入聊天模式 - 修复版：添加状态检查
 async function handleChatMode(bot_token, userId, chatId, KV) {
     try {
+        // 添加状态检查 - 防止重复开启
+        const alreadyInChatMode = await KV.get(`chat_mode:${userId}`);
+        if (alreadyInChatMode) {
+            await sendMessage(bot_token, chatId, "ℹ️ 您已经处于聊天模式，可以直接发送消息。\n\n如需退出，请输入 /end");
+            return;
+        }
+        
         await KV.put(`chat_mode:${userId}`, 'true', { expirationTtl: 1800 });
         await sendMessage(bot_token, chatId, `💬 <b>聊天模式已开启</b>\n\n📝 您现在可以直接发送消息与管理员沟通\n⏰ 聊天模式将持续30分钟\n❌ 输入 <code>/end</code> 退出聊天模式\n\n💡 请直接发送您的消息，我们会尽快回复您。`);
     } catch (error) {
@@ -235,11 +242,17 @@ async function handleChatMode(bot_token, userId, chatId, KV) {
     }
 }
 
-// 退出聊天模式
+// 退出聊天模式 - 修复版：添加状态验证
 async function handleEndChatMode(bot_token, userId, chatId, KV) {
     try {
+        const wasInChatMode = await KV.get(`chat_mode:${userId}`);
         await KV.delete(`chat_mode:${userId}`);
-        await sendMessage(bot_token, chatId, "❌ 聊天模式已结束。\n\n💡 如需再次联系管理员，请输入 <code>/chat</code> 重新开启聊天模式。");
+        
+        if (wasInChatMode) {
+            await sendMessage(bot_token, chatId, "❌ 聊天模式已结束。\n\n💡 如需再次联系管理员，请输入 /chat 重新开启聊天模式。");
+        } else {
+            await sendMessage(bot_token, chatId, "ℹ️ 您当前不在聊天模式中。");
+        }
     } catch (error) {
         console.error('Error ending chat mode:', error);
         await sendMessage(bot_token, chatId, "❌ 操作失败，请稍后再试。");
@@ -790,7 +803,7 @@ export default {
     },
 };
 
-// 处理 Telegram Webhook
+// 处理 Telegram Webhook - 修复版：添加状态检查和中文命令支持
 async function handleTelegramWebhook(request, bot_token, apiUrl, moontvUrl, username, password, KV, siteName) {
     try {
         const update = await request.json();
@@ -833,23 +846,26 @@ async function handleTelegramWebhook(request, bot_token, apiUrl, moontvUrl, user
                 if (isInChatMode) {
                     return await handleUserMessage(bot_token, userId, chatId, normalizedText, KV);
                 }
+                
+                // 添加：如果不在聊天模式但发送了普通消息，给出提示
+                await sendMessage(bot_token, chatId, "ℹ️ 请输入 /chat 开启聊天模式与管理员沟通。");
                 return new Response('OK');
             }
 
-            // 处理命令
-            if (normalizedText === '/start') {
+            // 处理命令 - 添加中文命令支持
+            if (normalizedText === '/start' || normalizedText === '开始') {
                 return await handleStartCommand(bot_token, userId, chatId, apiUrl, moontvUrl, username, password, KV, siteName);
-            } else if (normalizedText.startsWith('/pwd')) {
+            } else if (normalizedText.startsWith('/pwd') || normalizedText.startsWith('密码')) {
                 return await handlePwdCommand(bot_token, userId, chatId, normalizedText, apiUrl, moontvUrl, username, password, KV, siteName);
-            } else if (normalizedText === '/state') {
+            } else if (normalizedText === '/state' || normalizedText === '状态') {
                 return await handleStateCommand(bot_token, userId, chatId, apiUrl, moontvUrl, username, password, KV, siteName);
-            } else if (normalizedText === '/chat') {
+            } else if (normalizedText === '/chat' || normalizedText === '聊天') {
                 return await handleChatMode(bot_token, userId, chatId, KV);
-            } else if (normalizedText === '/end') {
+            } else if (normalizedText === '/end' || normalizedText === '退出' || normalizedText === '结束') {
                 return await handleEndChatMode(bot_token, userId, chatId, KV);
-            } else if (normalizedText === '/admin') {
+            } else if (normalizedText === '/admin' || normalizedText === '管理员') {
                 return await handleAdminPanel(bot_token, userId, chatId, KV);
-            } else if (normalizedText === '/cancel') {
+            } else if (normalizedText === '/cancel' || normalizedText === '取消') {
                 return await handleCancelCommand(bot_token, userId, chatId, isWaitingForPassword, isAdminWaitingReply, KV);
             }
         }
@@ -859,4 +875,4 @@ async function handleTelegramWebhook(request, bot_token, apiUrl, moontvUrl, user
         console.error('Error handling webhook:', error);
         return new Response('Error', { status: 500 });
     }
-          }
+}
